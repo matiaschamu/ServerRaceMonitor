@@ -170,7 +170,8 @@ namespace ServerRaceMonitor
                                         {
                                             mCalcularTiempo = true;
                                             sw.WriteLine("$I,\"16:36:08.000\",\"12 jan 01\"");
-                                            ss = "$F, " + (DataXML.VueltasTotales - DataXML.VueltaActual).ToString() + ", \"\", \"" + DateTime.Now.ToString("HH:mm:ss") + "\", \"" + DataXML.TiempoActual.ToString() + "\", \"" + bandera + "\"";
+                                            //ss = "$F, " + (DataXML.VueltasTotales - DataXML.VueltaActual).ToString() + ", \"\", \"" + DateTime.Now.ToString("HH:mm:ss") + "\", \"" + DataXML.TiempoActual.ToString() + "\", \"" + bandera + "\"";
+                                            ss = "$F, " + (DataXML.VueltasTotales - DataXML.VueltaActual).ToString() + ", \"\", \"" + DateTime.Now.ToString("HH:mm:ss") + "\", \"" + "     " + "\", \"" + bandera + "\"";
                                             sw.WriteLine(ss);
                                             ss = "$B,5,\"" + DataXML.TituloA + "  (" + DataXML.TituloB + ")\"";
                                             sw.WriteLine(ss);
@@ -225,7 +226,8 @@ namespace ServerRaceMonitor
                                         }
                                         else
                                         {
-                                            ss = "$F, " + (DataXML.VueltasTotales - DataXML.VueltaActual).ToString() + ", \"\", \"" + DateTime.Now.ToString("HH:mm:ss") + "\", \"" + DataXML.TiempoActual.ToString() + "\", \"" + bandera + "\"";
+                                            //ss = "$F, " + (DataXML.VueltasTotales - DataXML.VueltaActual).ToString() + ", \"\", \"" + DateTime.Now.ToString("HH:mm:ss") + "\", \"" + DataXML.TiempoActual.ToString() + "\", \"" + bandera + "\"";
+                                            ss = "$F, " + (DataXML.VueltasTotales - DataXML.VueltaActual).ToString() + ", \"\", \"" + DateTime.Now.ToString("HH:mm:ss") + "\", \"" + "     " + "\", \"" + bandera + "\"";
                                             sw.WriteLine(ss);
                                             ss = "$B,5,\"" + DataXML.TituloA + "  (" + DataXML.TituloB + ")\"";
                                             sw.WriteLine(ss);
