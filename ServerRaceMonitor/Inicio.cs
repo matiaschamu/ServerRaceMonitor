@@ -204,6 +204,8 @@ namespace ServerRaceMonitor
                                                 }
 
                                                 ss = "$A,\"" + registration + "\",\"" + itemD.NumPiloto + "\",0,\"" + nombre[1].Trim() + "\",\"" + nombre[0] + "\",\"\",0";
+                                                ss = ss.Replace('ñ', 'n');
+                                                ss = ss.Replace('Ñ', 'N');
                                                 sw.WriteLine(ss);
 
                                                 ss = "$H," + itemD.Puesto + ",\"" + registration + "\"," + itemD.VueltaMejorVuelta + ",\"" + MejorVuelta + "\"";
@@ -354,9 +356,7 @@ namespace ServerRaceMonitor
                 TimerChequeoInternet++;
             }
 
-
             T = T + "\r\n" + "Direccion IP Publica: " + PublicIP + "\r\n";
-
 
             T = T + "\r\n" + "Actualizaciones Recibidas: " + ActualizacionesRecibidas.ToString();
             T = T + "\r\n" + "Clientes conectados: " + Clientes.Count;
@@ -425,12 +425,6 @@ namespace ServerRaceMonitor
                 }
 
                 string temp = System.Text.Encoding.UTF8.GetString(B);
-               
-
-                byte[] bb = Encoding.Convert(Encoding.UTF8, Encoding.GetEncoding("windows-1252"), B);
-                //string p = System.Text.Encoding.ASCII.GetString(bb,1185,30);
-
-
 
                 temp = temp.Trim();
                 int l = temp.Length;
@@ -444,7 +438,7 @@ namespace ServerRaceMonitor
                     DataXML = null;
                     ActualizacionesRecibidas++;
                 }
-                if (temp.StartsWith("<Video><Prueba>") && temp.EndsWith("</Record></Video>"))
+                if (temp.StartsWith("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\r\n<Video><Prueba>") && temp.EndsWith("</Record></Video>"))
                 {
                     System.IO.File.WriteAllBytes("Video.xml", B);
 
