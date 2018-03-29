@@ -10,6 +10,8 @@ using System.Net;
 using System.Net.NetworkInformation;
 using System.Net.Sockets;
 using System.Text;
+using System.Text.RegularExpressions;
+using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
 using System.Xml;
@@ -19,8 +21,8 @@ namespace ServerRaceMonitor
     public partial class Inicio : Form
     {
         List<Socket> Clientes = new List<Socket>();
-        object SemaforoAddClientesUDP = new object();
-        object SemaforoChangeDataXML = new object();
+        Semaphore SemaforoAddClientesUDP = new Semaphore(1, 1);
+        Semaphore SemaforoChangeDataXML = new Semaphore(1, 1);
         bool realizarLimpiezaClientesUDP = false;
         int ActualizacionesRecibidas = 0;
         DatosCarrera DataXML;
@@ -42,10 +44,10 @@ namespace ServerRaceMonitor
         }
         private void Inicio_Load(object sender, EventArgs e)
         {
-            this.Text = "Race Monitor Server " + Application.ProductVersion.ToString() ;
+            this.Text = "Race Monitor Server " + Application.ProductVersion.ToString();
             textBoxPuertoCrono.Text = mConfig.puertoUDPCrono.ToString();
             textBoxPuertoRmon.Text = mConfig.puertoRaceMonitor.ToString();
-            textBoxListaBroadCast.Text = mConfig.listaDifusion.Replace("\r\n","\n").Replace("\n", "\r\n");
+            textBoxListaBroadCast.Text = mConfig.listaDifusion.Replace("\r\n", "\n").Replace("\n", "\r\n");
 
             if (backgroundWorkerEscucha.IsBusy == false)
             {
@@ -75,14 +77,18 @@ namespace ServerRaceMonitor
                         tcpListener.Start();
                     }
                     Socket s = tcpListener.AcceptSocket();
-                    lock (SemaforoAddClientesUDP)
+                    try
                     {
+                        SemaforoAddClientesUDP.WaitOne();
                         Clientes.Add(s);
+                    }
+                    finally
+                    {
+                        SemaforoAddClientesUDP.Release();
                     }
                 }
                 catch (Exception)
                 {
-
                 }
             } while (true);
         }
@@ -125,158 +131,213 @@ namespace ServerRaceMonitor
             System.Threading.Thread.CurrentThread.Name = "BackgroundWorkerBroadcastRaceMonitor";
             do
             {
-                List<Socket> cli = new List<Socket>();
-                lock (SemaforoAddClientesUDP)
+                try
                 {
-                    cli.AddRange(Clientes.ToArray());
-                }
+                    List<Socket> cli = new List<Socket>();
 
-                bool mCalcularTiempo = false;
-                DateTime mHoraFin;
-                DateTime mHoraInicio = DateTime.Now;
-                foreach (Socket item in cli)
-                {
                     try
                     {
-                        using (Stream s = new NetworkStream(item))
+                        SemaforoAddClientesUDP.WaitOne();
+                        cli.AddRange(Clientes.ToArray());
+                    }
+                    finally
+                    {
+                        SemaforoAddClientesUDP.Release();
+                    }
+
+                    bool mCalcularTiempo = false;
+                    DateTime mHoraFin;
+                    DateTime mHoraInicio = DateTime.Now;
+                    List<string> Data = new List<string>();
+                    try
+                    {
+
+
+                        SemaforoChangeDataXML.WaitOne();
+                        if (DataXML != null)
                         {
-                            using (StreamReader sr = new StreamReader(s))
+                            string bandera;
+                            switch (DataXML.EstadoCarrera)
                             {
-                                using (StreamWriter sw = new StreamWriter(s))
+                                case "0":
+                                    bandera = "Finish";
+                                    break;
+                                case "3":
+                                    bandera = "Verde ";
+                                    break;
+                                case "4":
+                                    bandera = "Verde ";
+                                    break;
+                                default:
+                                    bandera = "Finish";
+                                    break;
+                            }
+
+                            string ss = "";
+
+                            if (DataXML.DatosUsados == false)
+                            {
+                                mCalcularTiempo = true;
+                                EscribirLinea(Data, "$I,\"16:36:08.000\",\"12 jan 01\"");
+                                ss = "$F, " + (DataXML.VueltasTotales - DataXML.VueltaActual).ToString() + ", \"\", \"" + DateTime.Now.ToString("HH:mm:ss") + "\", \"" + "     " + "\", \"" + bandera + "\"";
+                                EscribirLinea(Data, ss);
+                                ss = "$B,5,\"" + DataXML.TituloA + "  (" + DataXML.TituloB + ")\"";
+                                EscribirLinea(Data, ss);
+                                ss = "$C,0,\"" + DataXML.TituloB + "\"";
+                                EscribirLinea(Data, ss);
+
+                                foreach (Lineas itemD in DataXML.DatosPilotos)
                                 {
-                                    sw.AutoFlush = true;
-                                    if (DataXML != null)
+                                    int A;
+                                    if (int.TryParse(itemD.NumPiloto, out A) == true)
                                     {
-                                        string bandera;
-                                        switch (DataXML.EstadoCarrera)
+                                        string N = itemD.NombreApellido;
+                                        if (N == "n/a")
                                         {
-                                            case "0":
-                                                bandera = "Finish";
-                                                break;
-                                            case "3":
-                                                bandera = "Verde ";
-                                                break;
-                                            case "4":
-                                                bandera = "Verde ";
-                                                break;
-                                            default:
-                                                bandera = "Finish";
-                                                break;
+                                            N = N + ",n/a";
+                                        }
+                                        string[] nombre = N.Split(',');
+                                        string registration = GenerarGuid(itemD.NumPiloto + itemD.NombreApellido);
+                                        TimeSpan h;
+                                        string tiempoTotal = "";
+                                        string MejorVuelta = "";
+                                        string UltimaVuelta = "";
+
+                                        if (itemD.TiempoTotal != "")
+                                        {
+                                            h = TimeSpan.Parse("00:" + itemD.TiempoTotal.Substring(0, itemD.TiempoTotal.Length - 4) + "." + itemD.TiempoTotal.Substring(itemD.TiempoTotal.Length - 3));
+                                            tiempoTotal = h.ToString(@"hh\:mm\:ss\.fff");
+                                        }
+                                        if (itemD.MejorVuelta != "")
+                                        {
+                                            h = TimeSpan.Parse("00:" + itemD.MejorVuelta.Substring(0, itemD.MejorVuelta.Length - 4) + "." + itemD.MejorVuelta.Substring(itemD.MejorVuelta.Length - 3));
+                                            MejorVuelta = h.ToString(@"hh\:mm\:ss\.fff");
+                                        }
+                                        if (itemD.UltimaVuelta != "")
+                                        {
+                                            h = TimeSpan.Parse("00:" + itemD.UltimaVuelta.Substring(0, itemD.UltimaVuelta.Length - 4) + "." + itemD.UltimaVuelta.Substring(itemD.UltimaVuelta.Length - 3));
+                                            UltimaVuelta = h.ToString(@"hh\:mm\:ss\.fff");
                                         }
 
-                                        string ss = "";
+                                        ss = "$A,\"" + registration + "\",\"" + itemD.NumPiloto + "\",0,\"" + nombre[1].Trim() + "\",\"" + nombre[0] + "\",\"\",0";
+                                        EscribirLinea(Data, ss);
 
-                                        if (DataXML.DatosUsados == false)
-                                        {
-                                            mCalcularTiempo = true;
-                                            sw.WriteLine("$I,\"16:36:08.000\",\"12 jan 01\"");
-                                            //ss = "$F, " + (DataXML.VueltasTotales - DataXML.VueltaActual).ToString() + ", \"\", \"" + DateTime.Now.ToString("HH:mm:ss") + "\", \"" + DataXML.TiempoActual.ToString() + "\", \"" + bandera + "\"";
-                                            ss = "$F, " + (DataXML.VueltasTotales - DataXML.VueltaActual).ToString() + ", \"\", \"" + DateTime.Now.ToString("HH:mm:ss") + "\", \"" + "     " + "\", \"" + bandera + "\"";
-                                            sw.WriteLine(ss);
-                                            ss = "$B,5,\"" + DataXML.TituloA + "  (" + DataXML.TituloB + ")\"";
-                                            sw.WriteLine(ss);
-                                            ss = "$C,0,\"" + DataXML.TituloB + "\"";
-                                            sw.WriteLine(ss);
+                                        ss = "$H," + itemD.Puesto + ",\"" + registration + "\"," + itemD.VueltaMejorVuelta + ",\"" + MejorVuelta + "\"";
+                                        EscribirLinea(Data, ss);
 
-                                            foreach (Lineas itemD in DataXML.DatosPilotos)
-                                            {
-                                                string[] nombre = itemD.NombreApellido.Split(',');
-                                                string registration = GenerarGuid(itemD.NumPiloto + itemD.NombreApellido);
-                                                TimeSpan h;
-                                                string tiempoTotal = "";
-                                                string MejorVuelta = "";
-                                                string UltimaVuelta = "";
+                                        ss = "$G," + itemD.Puesto + ",\"" + registration + "\"," + itemD.Vueltas + ",\"" + tiempoTotal + "\"";
+                                        EscribirLinea(Data, ss);
 
-                                                if (itemD.TiempoTotal != "")
-                                                {
-                                                    h = TimeSpan.Parse("00:" + itemD.TiempoTotal.Substring(0, itemD.TiempoTotal.Length - 4) + "." + itemD.TiempoTotal.Substring(itemD.TiempoTotal.Length - 3));
-                                                    tiempoTotal = h.ToString(@"hh\:mm\:ss\.fff");
-                                                }
-                                                if (itemD.MejorVuelta != "")
-                                                {
-                                                    h = TimeSpan.Parse("00:" + itemD.MejorVuelta.Substring(0, itemD.MejorVuelta.Length - 4) + "." + itemD.MejorVuelta.Substring(itemD.MejorVuelta.Length - 3));
-                                                    MejorVuelta = h.ToString(@"hh\:mm\:ss\.fff");
-                                                }
-                                                if (itemD.UltimaVuelta != "")
-                                                {
-                                                    h = TimeSpan.Parse("00:" + itemD.UltimaVuelta.Substring(0, itemD.UltimaVuelta.Length - 4) + "." + itemD.UltimaVuelta.Substring(itemD.UltimaVuelta.Length - 3));
-                                                    UltimaVuelta = h.ToString(@"hh\:mm\:ss\.fff");
-                                                }
-
-                                                ss = "$A,\"" + registration + "\",\"" + itemD.NumPiloto + "\",0,\"" + nombre[1].Trim() + "\",\"" + nombre[0] + "\",\"\",0";
-                                                ss = ss.Replace('ñ', 'n');
-                                                ss = ss.Replace('Ñ', 'N');
-                                                sw.WriteLine(ss);
-
-                                                ss = "$H," + itemD.Puesto + ",\"" + registration + "\"," + itemD.VueltaMejorVuelta + ",\"" + MejorVuelta + "\"";
-                                                sw.WriteLine(ss);
-
-                                                ss = "$G," + itemD.Puesto + ",\"" + registration + "\"," + itemD.Vueltas + ",\"" + tiempoTotal + "\"";
-                                                sw.WriteLine(ss);
-
-                                                ss = "$J,\"" + registration + "\",\"" + UltimaVuelta + "\",\"" + tiempoTotal + "\"";
-                                                sw.WriteLine(ss);
-                                            }
-
-                                            //ss = "$COMP,\"1234BE\",\"12X\",5,\"John\",\"Johnson\",\"USA\",\"CAMEL\"";
-                                            //sw.WriteLine(ss);
-
-                                            //ss = "$E,\"TRACKNAME\",\"Indianapolis Motor Speedway\"";
-                                            //sw.WriteLine(ss);
-                                            //ss = "$E,\"TRACKLENGTH\",\"2.500\"";
-                                            //sw.WriteLine(ss);
-                                        }
-                                        else
-                                        {
-                                            //ss = "$F, " + (DataXML.VueltasTotales - DataXML.VueltaActual).ToString() + ", \"\", \"" + DateTime.Now.ToString("HH:mm:ss") + "\", \"" + DataXML.TiempoActual.ToString() + "\", \"" + bandera + "\"";
-                                            ss = "$F, " + (DataXML.VueltasTotales - DataXML.VueltaActual).ToString() + ", \"\", \"" + DateTime.Now.ToString("HH:mm:ss") + "\", \"" + "     " + "\", \"" + bandera + "\"";
-                                            sw.WriteLine(ss);
-                                            ss = "$B,5,\"" + DataXML.TituloA + "  (" + DataXML.TituloB + ")\"";
-                                            sw.WriteLine(ss);
-                                            ss = "$C,0,\"" + DataXML.TituloB + "\"";
-                                            sw.WriteLine(ss);
-                                        }
+                                        ss = "$J,\"" + registration + "\",\"" + UltimaVuelta + "\",\"" + tiempoTotal + "\"";
+                                        EscribirLinea(Data, ss);
                                     }
-                                    else
+                                }
+                                //ss = "$COMP,\"1234BE\",\"12X\",5,\"John\",\"Johnson\",\"USA\",\"CAMEL\"";
+                                //sw.WriteLine(ss);
+                                //ss = "$E,\"TRACKNAME\",\"Indianapolis Motor Speedway\"";
+                                //sw.WriteLine(ss);
+                                //ss = "$E,\"TRACKLENGTH\",\"2.500\"";
+                                //sw.WriteLine(ss);
+                            }
+                            else
+                            {
+                                //ss = "$F, " + (DataXML.VueltasTotales - DataXML.VueltaActual).ToString() + ", \"\", \"" + DateTime.Now.ToString("HH:mm:ss") + "\", \"" + DataXML.TiempoActual.ToString() + "\", \"" + bandera + "\"";
+                                ss = "$F, " + (DataXML.VueltasTotales - DataXML.VueltaActual).ToString() + ", \"\", \"" + DateTime.Now.ToString("HH:mm:ss") + "\", \"" + "     " + "\", \"" + bandera + "\"";
+                                EscribirLinea(Data, ss);
+                                ss = "$B,5,\"" + DataXML.TituloA + "  (" + DataXML.TituloB + ")\"";
+                                EscribirLinea(Data, ss);
+                                ss = "$C,0,\"" + DataXML.TituloB + "\"";
+                                EscribirLinea(Data, ss);
+                            }
+                        }
+                        else
+                        {
+                            EscribirLinea(Data, "$I,\"16:36:08.000\",\"12 jan 01\"");
+                        }
+
+                        if (DataXML != null)
+                        {
+                            DataXML.DatosUsados = true;
+                        }
+                    }
+                    finally
+                    {
+                        SemaforoChangeDataXML.Release();
+                    }
+
+                    foreach (Socket item in cli)
+                    {
+                        try
+                        {
+                            using (Stream s = new NetworkStream(item))
+                            {
+                                using (StreamReader sr = new StreamReader(s))
+                                {
+                                    using (StreamWriter sw = new StreamWriter(s))
                                     {
-                                        sw.WriteLine("$I,\"16:36:08.000\",\"12 jan 01\"");
+                                        sw.AutoFlush = true;
+                                        foreach (string it in Data)
+                                        {
+                                            sw.WriteLine(it);
+                                        }
                                     }
                                 }
                             }
                         }
+                        catch (Exception ex)
+                        {
+                            realizarLimpiezaClientesUDP = true;
+                        }
                     }
-                    catch (Exception ex)
-                    {
-                        realizarLimpiezaClientesUDP = true;
-                    }
-                }
-                if (DataXML != null)
-                {
-                    DataXML.DatosUsados = true;
-                }
-                mHoraFin = DateTime.Now;
 
-                if (mCalcularTiempo)
-                {
-                    TiempoCiclo = mHoraFin - mHoraInicio;
-                    if (TiempoCiclo.Ticks > TiempoCicloMax.Ticks)
+                    mHoraFin = DateTime.Now;
+                    if (mCalcularTiempo)
                     {
-                        TiempoCicloMax = TiempoCiclo;
+                        TiempoCiclo = mHoraFin - mHoraInicio;
+                        if (TiempoCiclo.Ticks > TiempoCicloMax.Ticks)
+                        {
+                            TiempoCicloMax = TiempoCiclo;
+                        }
                     }
-                }
 
-                if (realizarLimpiezaClientesUDP)
-                {
-                    LimpiarConectados();
+                    if (realizarLimpiezaClientesUDP)
+                    {
+                        LimpiarConectados();
+                    }
+                    System.Threading.Thread.Sleep(1000);
                 }
-                System.Threading.Thread.Sleep(1000);
+                catch (Exception)
+                {
+                }
             } while (true);
         }
+
+        void EscribirLinea(List<string> L, string textoLinea)
+        {
+            Regex replace_a_Accents = new Regex("[á|à|ä|â]", RegexOptions.Compiled);
+            Regex replace_e_Accents = new Regex("[é|è|ë|ê]", RegexOptions.Compiled);
+            Regex replace_i_Accents = new Regex("[í|ì|ï|î]", RegexOptions.Compiled);
+            Regex replace_o_Accents = new Regex("[ó|ò|ö|ô]", RegexOptions.Compiled);
+            Regex replace_u_Accents = new Regex("[ú|ù|ü|û]", RegexOptions.Compiled);
+            Regex replace_ene = new Regex("[ñ]", RegexOptions.Compiled);
+            Regex replace_ene_Mayus = new Regex("[Ñ]", RegexOptions.Compiled);
+            textoLinea = replace_a_Accents.Replace(textoLinea, "a");
+            textoLinea = replace_e_Accents.Replace(textoLinea, "e");
+            textoLinea = replace_i_Accents.Replace(textoLinea, "i");
+            textoLinea = replace_o_Accents.Replace(textoLinea, "o");
+            textoLinea = replace_u_Accents.Replace(textoLinea, "u");
+            textoLinea = replace_ene.Replace(textoLinea, "n");
+            textoLinea = replace_ene_Mayus.Replace(textoLinea, "N");
+            L.Add(textoLinea);
+        }
+
         void LimpiarConectados()
         {
             List<Socket> temp = new List<Socket>();
-            lock (SemaforoAddClientesUDP)
+
+            try
             {
+                SemaforoAddClientesUDP.WaitOne();
                 foreach (var item in Clientes)
                 {
                     if (item.Connected == true)
@@ -285,6 +346,10 @@ namespace ServerRaceMonitor
                     }
                 }
                 Clientes = temp;
+            }
+            finally
+            {
+                SemaforoAddClientesUDP.Release();
             }
         }
         string GenerarGuid(string Data)
@@ -390,129 +455,164 @@ namespace ServerRaceMonitor
             IPEndPoint RemoteIpEndPoint = new IPEndPoint(IPAddress.Any, 0);
             do
             {
-                if (udpClient == null)
-                {
-                    udpClient = new UdpClient(datosPrograma.PuertoCronometraje);
-                }
-
-                byte[] B = null;
                 try
                 {
-                    B = udpClient.Receive(ref RemoteIpEndPoint);
-                    if (mMinimizar == true)
+                    if (udpClient == null)
                     {
-                        MinimizarVentana();
+                        udpClient = new UdpClient(datosPrograma.PuertoCronometraje);
+                    }
+
+                    byte[] B = null;
+                    try
+                    {
+                        B = udpClient.Receive(ref RemoteIpEndPoint);
+                        if (mMinimizar == true)
+                        {
+                            MinimizarVentana();
+                        }
+                    }
+                    catch (Exception)
+                    {
+                        B = System.Text.Encoding.UTF8.GetBytes("Cancel!!!");
+                    }
+
+                    foreach (IPEndPoint ip in datosPrograma.mBroadCast)
+                    {
+                        using (UdpClient c = new UdpClient())
+                        {
+                            try
+                            {
+                                c.Send(B, B.Length, ip.Address.ToString(), ip.Port);
+                            }
+                            catch (Exception)
+                            {
+                                throw;
+                            }
+                        }
+                    }
+
+                    string temp = System.Text.Encoding.UTF8.GetString(B);
+
+                    temp = temp.Trim();
+                    int l = temp.Length;
+                    DatosCarrera D = new DatosCarrera();
+                    D.DatosPilotos = new List<Lineas>();
+                    D.RecordVuelta = new Record();
+
+                    if (temp == "Cancel!!!")
+                    {
+                        try
+                        {
+                            System.IO.File.Delete("Video.xml");
+                        }
+                        catch (Exception)
+                        {
+                        }
+
+                        try
+                        {
+                            SemaforoChangeDataXML.WaitOne();
+                            DataXML = null;
+                        }
+                        finally
+                        {
+                            SemaforoChangeDataXML.Release();
+                        }
+
+                        ActualizacionesRecibidas++;
+                    }
+                    if (temp.StartsWith("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\r\n<Video><Prueba>") && temp.EndsWith("</Record></Video>"))
+                    {
+                        try
+                        {
+                            System.IO.File.WriteAllBytes("Video.xml", B);
+                        }
+                        catch (Exception)
+                        {
+                        }
+
+                        XmlDocument x = new System.Xml.XmlDocument();
+                        //Stream xs = new MemoryStream(B);
+                        //x.Load(xs);
+                        x.LoadXml(temp);
+
+                        XmlNodeList pru = x.SelectNodes("/Video/Prueba");
+                        string TipoPrueba = Formatear(pru[0]);
+
+                        if (TipoPrueba == "Clasificacion" || TipoPrueba == "Carrera")
+                        {
+                            pru = x.SelectNodes("/Video/Titulos/Titulo");
+
+                            D.TituloA = Formatear(pru[0]);
+                            D.TituloB = Formatear(pru[1]);
+
+                            pru = x.SelectNodes("/Video/DatosCarrera");
+
+                            D.TiempoActual = Formatear(pru[0].ChildNodes[0]);
+                            D.EstadoCarrera = Formatear(pru[0].ChildNodes[1]);
+                            D.VueltasTotales = int.Parse(Formatear(pru[0].ChildNodes[2]));
+                            D.VueltaActual = int.Parse(Formatear(pru[0].ChildNodes[3]));
+
+                            pru = x.SelectNodes("/Video/Datos/Linea");
+                            int cant = pru.Count;
+
+                            for (int i = 0; i < cant; i++)
+                            {
+                                Lineas L = new Lineas();
+                                L.Puesto = Formatear(pru[i].ChildNodes[0]);
+                                L.NumPiloto = Formatear(pru[i].ChildNodes[1]);
+                                L.NombreApellido = Formatear(pru[i].ChildNodes[2]);
+
+                                if (TipoPrueba == "Clasificacion")
+                                {
+                                    L.MejorVuelta = Formatear(pru[i].ChildNodes[3]);
+                                    L.Diferencia = Formatear(pru[i].ChildNodes[4]);
+                                    L.UltimaVuelta = Formatear(pru[i].ChildNodes[5]);
+                                    L.Vueltas = Formatear(pru[i].ChildNodes[6]);
+                                    L.TiempoTotal = Formatear(pru[i].ChildNodes[7]);
+                                    L.Recargos = Formatear(pru[i].ChildNodes[8]);
+                                    L.Transponder = Formatear(pru[i].ChildNodes[9]);
+                                    L.VueltaMejorVuelta = Formatear(pru[i].ChildNodes[10]);
+                                }
+                                else if (TipoPrueba == "Carrera")
+                                {
+                                    L.UltimaVuelta = Formatear(pru[i].ChildNodes[3]);
+                                    L.MejorVuelta = Formatear(pru[i].ChildNodes[4]);
+                                    L.TiempoTotal = Formatear(pru[i].ChildNodes[5]);
+                                    L.Diferencia = Formatear(pru[i].ChildNodes[6]);
+                                    L.Vueltas = Formatear(pru[i].ChildNodes[7]);
+                                    L.Recargos = Formatear(pru[i].ChildNodes[8]);
+                                    L.Transponder = Formatear(pru[i].ChildNodes[9]);
+                                    L.VueltaMejorVuelta = Formatear(pru[i].ChildNodes[10]);
+                                }
+                                D.DatosPilotos.Add(L);
+                            }
+
+                            pru = x.SelectNodes("/Video/Record");
+                            D.RecordVuelta.NumPiloto = Formatear(pru[0].ChildNodes[0]);
+                            D.RecordVuelta.NombreApellido = Formatear(pru[0].ChildNodes[1]);
+                            D.RecordVuelta.Vuelta = Formatear(pru[0].ChildNodes[2]);
+                            D.RecordVuelta.MejorVuelta = Formatear(pru[0].ChildNodes[3]);
+                            D.RecordVuelta.Velocidad = Formatear(pru[0].ChildNodes[4]);
+
+                            D.DatosUsados = false;
+
+                            try
+                            {
+                                SemaforoChangeDataXML.WaitOne();
+                                DataXML = new DatosCarrera();
+                                DataXML.clone(D);
+                            }
+                            finally
+                            {
+                                SemaforoChangeDataXML.Release();
+                            }
+                            ActualizacionesRecibidas++;
+                        }
                     }
                 }
                 catch (Exception)
                 {
-                    B = System.Text.Encoding.UTF8.GetBytes("Cancel!!!");
-                }
-
-                foreach (IPEndPoint ip in datosPrograma.mBroadCast)
-                {
-                    using (UdpClient c = new UdpClient())
-                    {
-                        try
-                        {
-                            c.Send(B, B.Length, ip.Address.ToString(), ip.Port);
-                        }
-                        catch (Exception)
-                        {
-                            throw;
-                        }
-                    }
-                }
-
-                string temp = System.Text.Encoding.UTF8.GetString(B);
-
-                temp = temp.Trim();
-                int l = temp.Length;
-                DatosCarrera D = new DatosCarrera();
-                D.DatosPilotos = new List<Lineas>();
-                D.RecordVuelta = new Record();
-
-                if (temp == "Cancel!!!")
-                {
-                    System.IO.File.Delete("Video.xml");
-                    DataXML = null;
-                    ActualizacionesRecibidas++;
-                }
-                if (temp.StartsWith("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\r\n<Video><Prueba>") && temp.EndsWith("</Record></Video>"))
-                {
-                    System.IO.File.WriteAllBytes("Video.xml", B);
-
-                    XmlDocument x = new System.Xml.XmlDocument();
-                    //Stream xs = new MemoryStream(B);
-                    //x.Load(xs);
-                    x.LoadXml(temp);
-
-                    XmlNodeList pru = x.SelectNodes("/Video/Prueba");
-                    string TipoPrueba = Formatear(pru[0]);
-
-                    if (TipoPrueba == "Clasificacion" || TipoPrueba == "Carrera")
-                    {
-                        pru = x.SelectNodes("/Video/Titulos/Titulo");
-
-                        D.TituloA = Formatear(pru[0]);
-                        D.TituloB = Formatear(pru[1]);
-
-                        pru = x.SelectNodes("/Video/DatosCarrera");
-
-                        D.TiempoActual = Formatear(pru[0].ChildNodes[0]);
-                        D.EstadoCarrera = Formatear(pru[0].ChildNodes[1]);
-                        D.VueltasTotales = int.Parse(Formatear(pru[0].ChildNodes[2]));
-                        D.VueltaActual = int.Parse(Formatear(pru[0].ChildNodes[3]));
-
-                        pru = x.SelectNodes("/Video/Datos/Linea");
-                        int cant = pru.Count;
-
-                        for (int i = 0; i < cant; i++)
-                        {
-                            Lineas L = new Lineas();
-                            L.Puesto = Formatear(pru[i].ChildNodes[0]);
-                            L.NumPiloto = Formatear(pru[i].ChildNodes[1]);
-                            L.NombreApellido = Formatear(pru[i].ChildNodes[2]);
-
-                            if (TipoPrueba == "Clasificacion")
-                            {
-                                L.MejorVuelta = Formatear(pru[i].ChildNodes[3]);
-                                L.Diferencia = Formatear(pru[i].ChildNodes[4]);
-                                L.UltimaVuelta = Formatear(pru[i].ChildNodes[5]);
-                                L.Vueltas = Formatear(pru[i].ChildNodes[6]);
-                                L.TiempoTotal = Formatear(pru[i].ChildNodes[7]);
-                                L.Recargos = Formatear(pru[i].ChildNodes[8]);
-                                L.Transponder = Formatear(pru[i].ChildNodes[9]);
-                                L.VueltaMejorVuelta = Formatear(pru[i].ChildNodes[10]);
-                            }
-                            else if (TipoPrueba == "Carrera")
-                            {
-                                L.UltimaVuelta = Formatear(pru[i].ChildNodes[3]);
-                                L.MejorVuelta = Formatear(pru[i].ChildNodes[4]);
-                                L.TiempoTotal = Formatear(pru[i].ChildNodes[5]);
-                                L.Diferencia = Formatear(pru[i].ChildNodes[6]);
-                                L.Vueltas = Formatear(pru[i].ChildNodes[7]);
-                                L.Recargos = Formatear(pru[i].ChildNodes[8]);
-                                L.Transponder = Formatear(pru[i].ChildNodes[9]);
-                                L.VueltaMejorVuelta = Formatear(pru[i].ChildNodes[10]);
-                            }
-                            D.DatosPilotos.Add(L);
-                        }
-
-                        pru = x.SelectNodes("/Video/Record");
-                        D.RecordVuelta.NumPiloto = Formatear(pru[0].ChildNodes[0]);
-                        D.RecordVuelta.NombreApellido = Formatear(pru[0].ChildNodes[1]);
-                        D.RecordVuelta.Vuelta = Formatear(pru[0].ChildNodes[2]);
-                        D.RecordVuelta.MejorVuelta = Formatear(pru[0].ChildNodes[3]);
-                        D.RecordVuelta.Velocidad = Formatear(pru[0].ChildNodes[4]);
-
-                        D.DatosUsados = false;
-                        lock (SemaforoChangeDataXML)
-                        {
-                            DataXML = D;
-                        }
-                        ActualizacionesRecibidas++;
-                    }
                 }
             } while (true);
         }
@@ -676,6 +776,15 @@ namespace ServerRaceMonitor
         public string Vuelta;
         public string Velocidad;
         public string DistanciaCircuito;
+        public void clone(Record R)
+        {
+            NumPiloto = R.NumPiloto;
+            NombreApellido = R.NombreApellido;
+            MejorVuelta = R.MejorVuelta;
+            Vuelta = R.Vuelta;
+            Velocidad = R.Velocidad;
+            DistanciaCircuito = R.DistanciaCircuito;
+        }
     }
     public class DatosCarrera
     {
@@ -688,5 +797,19 @@ namespace ServerRaceMonitor
         public List<Lineas> DatosPilotos;
         public Record RecordVuelta;
         public bool DatosUsados;
+        public void clone(DatosCarrera D)
+        {
+            TituloA = D.TituloA;
+            TituloB = D.TituloB;
+            TiempoActual = D.TiempoActual;
+            EstadoCarrera = D.EstadoCarrera;
+            VueltaActual = D.VueltaActual;
+            VueltasTotales = D.VueltasTotales;
+            DatosPilotos = new List<Lineas>();
+            DatosPilotos.AddRange(D.DatosPilotos.ToArray());
+            RecordVuelta = new Record();
+            RecordVuelta.clone(D.RecordVuelta);
+            DatosUsados = D.DatosUsados;
+        }
     }
 }
