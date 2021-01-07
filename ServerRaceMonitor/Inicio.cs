@@ -284,7 +284,7 @@ namespace ServerRaceMonitor
                                 }
                             }
                         }
-                        catch (Exception ex)
+                        catch (Exception)
                         {
                             realizarLimpiezaClientesUDP = true;
                         }

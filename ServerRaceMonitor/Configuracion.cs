@@ -11,7 +11,7 @@ namespace ServerRaceMonitor
         public string puertoRaceMonitor = "50000";
         public string puertoUDPCrono = "50001";
         public string listaDifusion = "";
-        
+
 
         public Configuracion()
             : base("RMcfg.dat", "", "", false)
